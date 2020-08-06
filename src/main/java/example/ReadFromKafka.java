@@ -1,18 +1,15 @@
 package example;
 
-import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.FlatMapFunction;
-import org.apache.flink.api.common.serialization.AbstractDeserializationSchema;
-import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple4;
-import org.apache.flink.api.java.tuple.Tuple6;
 import org.apache.flink.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSink;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.AssignerWithPeriodicWatermarks;
 import org.apache.flink.streaming.api.functions.ProcessFunction;
+import org.apache.flink.streaming.api.watermark.Watermark;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaProducer;
 import org.apache.flink.streaming.util.serialization.JSONKeyValueDeserializationSchema;
@@ -20,8 +17,7 @@ import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
-import java.util.Arrays;
+import javax.annotation.Nullable;
 import java.util.Properties;
 
 public class ReadFromKafka {
@@ -32,7 +28,7 @@ public class ReadFromKafka {
     public static String CARD_TYPE = "CARD_TYPE";
     //// VARIABLES
     public static String KAFKA_CONSUMER_TOPIC = "input";
-    public static String KAFKA_PRODUCER_TOPIC = "credit_card_5min_top5_by_card_type";
+    public static String KAFKA_PRODUCER_TOPIC = "credit_card_1min_top5_by_card_type";
     //// TEST IN CLUSTER
     public static String BOOTSTRAP_SERVER = "172.30.74.84:9092,172.30.74.85:9092,172.30.74.86:9092";
 //    public static String BOOTSTRAP_SERVER = "poc01.kbtg:9092,poc02.kbtg:9092,poc03.kbtg:9092";
@@ -65,7 +61,22 @@ public class ReadFromKafka {
                         s.get("value").get(TXN_AMT).asDouble(),
                         s.get("value").get(TIMESTAMP).asLong()));
             }
-        });
+        }).assignTimestampsAndWatermarks(new AssignerWithPeriodicWatermarks<Tuple4<String, String, Double, Long>>() {
+            private long MAX_TIMESTAMP;
+            @Nullable
+            @Override
+            public Watermark getCurrentWatermark() {
+                Watermark watermark = new Watermark(MAX_TIMESTAMP);
+                return watermark;
+            }
+
+            @Override
+            public long extractTimestamp(Tuple4<String, String, Double, Long> currentElement, long l) {
+                long currentWatermark = currentElement.f3;
+                MAX_TIMESTAMP = Math.max(currentWatermark, MAX_TIMESTAMP);
+                return currentElement.f3;
+            }
+        }).rebalance();
 
         //// PRODUCT KAFKA
         FlinkKafkaProducer<String> myProducer = new FlinkKafkaProducer(KAFKA_PRODUCER_TOPIC, new ProducerStringSerializationSchema(KAFKA_PRODUCER_TOPIC), properties, FlinkKafkaProducer.Semantic.EXACTLY_ONCE);
